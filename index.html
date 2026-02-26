@@ -34,10 +34,11 @@ body { background: #0f172a; }
 
 <div id="app"></div>
 
-<!-- Firebase SDKs -->
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+// اضافه شدن ماژول‌های احراز هویت
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBhyu6zBEDze6pry2NJ7IBbXoW8N3p_vPQ",
@@ -50,6 +51,9 @@ const firebaseConfig = {
 
 const fireApp = initializeApp(firebaseConfig);
 const db = getFirestore(fireApp);
+const auth = getAuth(fireApp); // راه‌اندازی احراز هویت
+
+// پسورد و یوزرنیم ادمین از اینجا حذف شد تا امنیت حفظ شود
 
 // ─── State ───
 let state = {
@@ -69,8 +73,17 @@ let state = {
   toasts: []
 };
 
-const ADMIN_USER = 'Taheri';
-const ADMIN_PASS = 'Taha@School1';
+// ─── بررسی وضعیت لاگین بودن ادمین ───
+onAuthStateChanged(auth, (user) => {
+  if (user) {
+    state.isAdmin = true;
+  } else {
+    state.isAdmin = false;
+    // اگه ادمین خارج شد و تو صفحه مدیریت بود، برگرده به خانه
+    if (state.page === 'admin') state.page = 'home';
+  }
+  render();
+});
 
 const CATEGORIES = {
   news: { label: 'خبر', emoji: '📰', color: 'blue' },
@@ -246,7 +259,6 @@ function renderHome() {
       </div>
     </div>` : ''}
 
-    <!-- Stats -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 fade-up">
       ${Object.entries(CATEGORIES).map(([key, cat]) => {
         const c = COLORS[cat.color];
@@ -258,7 +270,6 @@ function renderHome() {
       }).join('')}
     </div>
 
-    <!-- Search & Filter -->
     <div class="glass rounded-2xl p-4 fade-up">
       <div class="flex flex-col sm:flex-row gap-3">
         <div class="flex-1 relative">
@@ -275,7 +286,6 @@ function renderHome() {
       </div>
     </div>
 
-    <!-- Announcements List -->
     <div class="space-y-4">
       ${state.loading ? `
         <div class="skeleton h-32 rounded-2xl"></div>
@@ -331,10 +341,10 @@ function renderLogin() {
       ${state.loginError ? `<div class="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm text-center">${state.loginError}</div>` : ''}
       <div class="space-y-4">
         <div>
-          <label class="block text-sm font-medium text-slate-300 mb-2">نام کاربری</label>
+          <label class="block text-sm font-medium text-slate-300 mb-2">ایمیل</label>
           <div class="relative">
-            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">👤</span>
-            <input type="text" id="loginUser" placeholder="نام کاربری را وارد کنید"
+            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">📧</span>
+            <input type="email" id="loginEmail" placeholder="ایمیل خود را وارد کنید"
               class="w-full bg-slate-800/50 border border-slate-600/30 rounded-xl pr-10 pl-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20" />
           </div>
         </div>
@@ -360,7 +370,6 @@ function renderLogin() {
 function renderAdminPanel() {
   const filtered = getFiltered();
   return `<main class="max-w-6xl mx-auto px-4 py-6 space-y-6">
-    <!-- Form -->
     <div class="glass rounded-2xl p-6 fade-up">
       <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
         ${state.editingId ? '✏️ ویرایش اطلاعیه' : '➕ اطلاعیه جدید'}
@@ -400,7 +409,6 @@ function renderAdminPanel() {
       </div>
     </div>
 
-    <!-- List -->
     <div class="glass rounded-2xl p-6 fade-up">
       <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">📋 اطلاعیه‌های ثبت شده (${state.announcements.length})</h2>
       <div class="space-y-3">
@@ -507,9 +515,11 @@ async function handleAction(e) {
       break;
 
     case 'logout':
-      state.isAdmin = false;
-      state.page = 'home';
-      showToast('با موفقیت خارج شدید', 'info');
+      signOut(auth).then(() => {
+        showToast('با موفقیت خارج شدید', 'info');
+      }).catch((error) => {
+        showToast('خطا در خروج', 'error');
+      });
       break;
 
     case 'togglePassword':
@@ -518,28 +528,31 @@ async function handleAction(e) {
       break;
 
     case 'doLogin': {
-      const user = document.getElementById('loginUser')?.value?.trim();
+      const email = document.getElementById('loginEmail')?.value?.trim();
       const pass = document.getElementById('loginPass')?.value;
-      if (!user || !pass) {
-        state.loginError = 'لطفاً نام کاربری و رمز عبور را وارد کنید';
+      
+      if (!email || !pass) {
+        state.loginError = 'لطفاً ایمیل و رمز عبور را وارد کنید';
         render();
         return;
       }
+      
       state.loginLoading = true;
       state.loginError = '';
       render();
-      setTimeout(() => {
-        if (user === ADMIN_USER && pass === ADMIN_PASS) {
-          state.isAdmin = true;
+
+      signInWithEmailAndPassword(auth, email, pass)
+        .then((userCredential) => {
           state.page = 'admin';
           state.loginLoading = false;
           showToast('خوش آمدید، ادمین! 👋');
-        } else {
-          state.loginError = 'نام کاربری یا رمز عبور اشتباه است';
+        })
+        .catch((error) => {
+          console.error(error);
+          state.loginError = 'ایمیل یا رمز عبور اشتباه است';
           state.loginLoading = false;
           render();
-        }
-      }, 800);
+        });
       break;
     }
 
