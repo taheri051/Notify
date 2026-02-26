@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>سامانه اطلاع‌رسانی</title>
+<link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: { vazir: ['Vazirmatn', 'sans-serif'] }
+    }
+  }
+}
+</script>
+<style>
+* { font-family: 'Vazirmatn', sans-serif; }
+body { background: #0f172a; }
+.glass { background: rgba(30,41,59,0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.08); }
+.glass-light { background: rgba(51,65,85,0.5); backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.05); }
+@keyframes fadeUp { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
+.fade-up { animation: fadeUp 0.4s ease-out forwards; }
+@keyframes pulse-dot { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+.pulse-dot { animation: pulse-dot 1.5s infinite; }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+.skeleton { background: linear-gradient(90deg, rgba(51,65,85,0.5) 25%, rgba(71,85,105,0.5) 50%, rgba(51,65,85,0.5) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 8px; }
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+.scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+</style>
+</head>
+<body class="min-h-screen text-white">
+
+<div id="app"></div>
+
+<!-- Firebase SDKs -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBhyu6zBEDze6pry2NJ7IBbXoW8N3p_vPQ",
+  authDomain: "notify-ddeb4.firebaseapp.com",
+  projectId: "notify-ddeb4",
+  storageBucket: "notify-ddeb4.firebasestorage.app",
+  messagingSenderId: "941146596086",
+  appId: "1:941146596086:web:5297737fcca615503b42d7"
+};
+
+const fireApp = initializeApp(firebaseConfig);
+const db = getFirestore(fireApp);
+
+// ─── State ───
+let state = {
+  page: 'home',
+  isAdmin: false,
+  announcements: [],
+  loading: true,
+  search: '',
+  filter: 'all',
+  editingId: null,
+  deleteConfirm: null,
+  loginError: '',
+  loginLoading: false,
+  showPassword: false,
+  formData: { title: '', content: '', category: 'news', pinned: false },
+  expandedCards: new Set(),
+  toasts: []
+};
+
+const ADMIN_USER = 'Taheri';
+const ADMIN_PASS = 'Taha@School1';
+
+const CATEGORIES = {
+  news: { label: 'خبر', emoji: '📰', color: 'blue' },
+  announcement: { label: 'اعلان', emoji: '📢', color: 'emerald' },
+  urgent: { label: 'فوری', emoji: '⚠️', color: 'red' },
+  event: { label: 'رویداد', emoji: '📅', color: 'purple' }
+};
+
+const COLORS = {
+  blue: { bg: 'rgba(59,130,246,0.15)', border: 'rgba(59,130,246,0.3)', text: '#93c5fd', badge: 'bg-blue-500/20 text-blue-300 border-blue-500/30' },
+  emerald: { bg: 'rgba(16,185,129,0.15)', border: 'rgba(16,185,129,0.3)', text: '#6ee7b7', badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
+  red: { bg: 'rgba(239,68,68,0.15)', border: 'rgba(239,68,68,0.3)', text: '#fca5a5', badge: 'bg-red-500/20 text-red-300 border-red-500/30' },
+  purple: { bg: 'rgba(168,85,247,0.15)', border: 'rgba(168,85,247,0.3)', text: '#c4b5fd', badge: 'bg-purple-500/20 text-purple-300 border-purple-500/30' }
+};
+
+// ─── Toast ───
+function showToast(message, type = 'success') {
+  const id = Date.now();
+  state.toasts.push({ id, message, type });
+  render();
+  setTimeout(() => {
+    state.toasts = state.toasts.filter(t => t.id !== id);
+    render();
+  }, 3000);
+}
+
+// ─── Firebase Real-time Listener ───
+const q = query(collection(db, "announcements"), orderBy("createdAt", "desc"));
+onSnapshot(q, (snapshot) => {
+  state.announcements = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+  state.loading = false;
+  render();
+}, (error) => {
+  console.error("Firebase error:", error);
+  state.loading = false;
+  render();
+});
+
+// ─── Firebase CRUD ───
+async function addAnnouncement(data) {
+  await addDoc(collection(db, "announcements"), {
+    ...data,
+    createdAt: serverTimestamp()
+  });
+}
+
+async function updateAnnouncement(id, data) {
+  await updateDoc(doc(db, "announcements", id), data);
+}
+
+async function deleteAnnouncement(id) {
+  await deleteDoc(doc(db, "announcements", id));
+}
+
+// ─── Helpers ───
+function persianDate(timestamp) {
+  if (!timestamp) return 'الان';
+  try {
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    return new Intl.DateTimeFormat('fa-IR', {
+      year: 'numeric', month: 'long', day: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    }).format(date);
+  } catch { return 'اخیراً'; }
+}
+
+function timeAgo(timestamp) {
+  if (!timestamp) return 'الان';
+  try {
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (seconds < 60) return 'لحظاتی پیش';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)} دقیقه پیش`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)} ساعت پیش`;
+    if (seconds < 604800) return `${Math.floor(seconds / 86400)} روز پیش`;
+    return persianDate(timestamp);
+  } catch { return 'اخیراً'; }
+}
+
+function getFiltered() {
+  let items = [...state.announcements];
+  if (state.filter !== 'all') items = items.filter(a => a.category === state.filter);
+  if (state.search.trim()) {
+    const s = state.search.trim().toLowerCase();
+    items = items.filter(a => a.title.toLowerCase().includes(s) || a.content.toLowerCase().includes(s));
+  }
+  const pinned = items.filter(a => a.pinned);
+  const normal = items.filter(a => !a.pinned);
+  return [...pinned, ...normal];
+}
+
+function getCounts() {
+  const c = { all: state.announcements.length };
+  Object.keys(CATEGORIES).forEach(k => { c[k] = state.announcements.filter(a => a.category === k).length; });
+  return c;
+}
+
+// ─── Render ───
+function render() {
+  const app = document.getElementById('app');
+  app.innerHTML = renderToasts() + renderHeader() + renderMain();
+  attachEvents();
+}
+
+function renderToasts() {
+  if (!state.toasts.length) return '';
+  return `<div class="fixed top-4 left-4 right-4 z-50 flex flex-col items-center gap-2 pointer-events-none">
+    ${state.toasts.map(t => `
+      <div class="pointer-events-auto px-6 py-3 rounded-xl shadow-2xl fade-up ${t.type === 'success' ? 'bg-emerald-500/90' : t.type === 'error' ? 'bg-red-500/90' : 'bg-blue-500/90'} text-white font-medium backdrop-blur-sm">
+        ${t.type === 'success' ? '✅' : t.type === 'error' ? '❌' : 'ℹ️'} ${t.message}
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+function renderHeader() {
+  return `
+  <header class="glass sticky top-0 z-40 border-b border-white/5">
+    <div class="max-w-6xl mx-auto px-4 py-3">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3 cursor-pointer" data-action="goHome">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-lg shadow-lg shadow-blue-500/20">📢</div>
+          <div>
+            <h1 class="text-lg font-bold bg-gradient-to-r from-blue-300 to-purple-300 bg-clip-text text-transparent">سامانه اطلاع‌رسانی</h1>
+            <p class="text-[10px] text-slate-400">اخبار و اعلانات</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          ${state.isAdmin ? `
+            <span class="hidden sm:inline text-xs text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-lg border border-emerald-500/20">👋 خوش آمدید، ادمین</span>
+            <button data-action="goAdmin" class="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium ${state.page === 'admin' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'glass-light text-slate-300 hover:text-white'} transition-all">
+              ⚙️ <span class="hidden sm:inline">پنل مدیریت</span>
+            </button>
+            <button data-action="goHome" class="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium ${state.page === 'home' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'glass-light text-slate-300 hover:text-white'} transition-all">
+              🏠 <span class="hidden sm:inline">خانه</span>
+            </button>
+            <button data-action="logout" class="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-all">
+              🚪 <span class="hidden sm:inline">خروج</span>
+            </button>
+          ` : `
+            <button data-action="goLogin" class="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium glass-light text-slate-300 hover:text-white transition-all">
+              🔐 <span class="hidden sm:inline">ورود ادمین</span>
+            </button>
+          `}
+        </div>
+      </div>
+    </div>
+  </header>`;
+}
+
+function renderMain() {
+  if (state.page === 'login') return renderLogin();
+  if (state.page === 'admin' && state.isAdmin) return renderAdminPanel();
+  return renderHome();
+}
+
+// ─── Home Page ───
+function renderHome() {
+  const urgents = state.announcements.filter(a => a.category === 'urgent');
+  const counts = getCounts();
+  const filtered = getFiltered();
+
+  return `<main class="max-w-6xl mx-auto px-4 py-6 space-y-6">
+    ${urgents.length ? `
+    <div class="fade-up glass rounded-2xl overflow-hidden border-r-4 border-red-500" style="background:linear-gradient(135deg,rgba(239,68,68,0.1),rgba(30,41,59,0.7))">
+      <div class="p-4 flex items-center gap-3">
+        <span class="text-2xl pulse-dot">🚨</span>
+        <div class="overflow-hidden flex-1">
+          <div class="flex gap-8 animate-marquee whitespace-nowrap">
+            ${urgents.map(u => `<span class="text-red-200 font-medium">${u.title}</span>`).join('<span class="text-red-500/50 mx-2">◆</span>')}
+          </div>
+        </div>
+      </div>
+    </div>` : ''}
+
+    <!-- Stats -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 fade-up">
+      ${Object.entries(CATEGORIES).map(([key, cat]) => {
+        const c = COLORS[cat.color];
+        return `<div class="glass rounded-xl p-4 text-center transition-all hover:scale-[1.02] cursor-pointer" style="border:1px solid ${c.border}">
+          <div class="text-2xl mb-1">${cat.emoji}</div>
+          <div class="text-2xl font-bold" style="color:${c.text}">${counts[key] || 0}</div>
+          <div class="text-xs text-slate-400 mt-1">${cat.label}</div>
+        </div>`;
+      }).join('')}
+    </div>
+
+    <!-- Search & Filter -->
+    <div class="glass rounded-2xl p-4 fade-up">
+      <div class="flex flex-col sm:flex-row gap-3">
+        <div class="flex-1 relative">
+          <span class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">🔍</span>
+          <input type="text" id="searchInput" placeholder="جستجو در اطلاعیه‌ها..." value="${state.search}"
+            class="w-full bg-slate-800/50 border border-slate-600/30 rounded-xl pr-10 pl-4 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 transition-all" />
+        </div>
+        <div class="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
+          <button data-filter="all" class="shrink-0 px-4 py-2 rounded-xl text-xs font-medium transition-all ${state.filter === 'all' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'glass-light text-slate-400 hover:text-white'}">همه (${counts.all})</button>
+          ${Object.entries(CATEGORIES).map(([key, cat]) => `
+            <button data-filter="${key}" class="shrink-0 px-4 py-2 rounded-xl text-xs font-medium transition-all ${state.filter === key ? COLORS[cat.color].badge + ' border' : 'glass-light text-slate-400 hover:text-white'}">${cat.emoji} ${cat.label} (${counts[key] || 0})</button>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+
+    <!-- Announcements List -->
+    <div class="space-y-4">
+      ${state.loading ? `
+        <div class="skeleton h-32 rounded-2xl"></div>
+        <div class="skeleton h-28 rounded-2xl"></div>
+        <div class="skeleton h-36 rounded-2xl"></div>
+      ` : filtered.length === 0 ? `
+        <div class="glass rounded-2xl p-12 text-center fade-up">
+          <div class="text-5xl mb-4">📭</div>
+          <h3 class="text-lg font-bold text-slate-300 mb-2">اطلاعیه‌ای یافت نشد</h3>
+          <p class="text-slate-500 text-sm">هنوز اطلاعیه‌ای ثبت نشده یا فیلتر شما نتیجه‌ای ندارد</p>
+        </div>
+      ` : filtered.map((a, i) => renderCard(a, i)).join('')}
+    </div>
+  </main>`;
+}
+
+function renderCard(a, i) {
+  const cat = CATEGORIES[a.category] || CATEGORIES.news;
+  const c = COLORS[cat.color];
+  const isExpanded = state.expandedCards.has(a.id);
+  const isLong = a.content && a.content.length > 150;
+  const content = isLong && !isExpanded ? a.content.substring(0, 150) + '...' : a.content;
+
+  return `
+  <div class="glass rounded-2xl overflow-hidden transition-all hover:scale-[1.005] fade-up" style="animation-delay:${i * 0.05}s; border-right:4px solid ${c.border}">
+    <div class="p-5">
+      <div class="flex items-start justify-between mb-3">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="px-3 py-1 rounded-lg text-xs font-medium border ${COLORS[cat.color].badge}">${cat.emoji} ${cat.label}</span>
+          ${a.pinned ? '<span class="px-2 py-1 rounded-lg text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30">📌 سنجاق شده</span>' : ''}
+        </div>
+        <span class="text-xs text-slate-500 shrink-0 mr-2">${timeAgo(a.createdAt)}</span>
+      </div>
+      <h3 class="text-base font-bold text-white mb-2">${a.title}</h3>
+      <p class="text-sm text-slate-300 leading-7 whitespace-pre-line">${content}</p>
+      ${isLong ? `<button data-expand="${a.id}" class="text-xs mt-2 font-medium transition-all" style="color:${c.text}">${isExpanded ? 'بستن ▲' : 'ادامه مطلب ▼'}</button>` : ''}
+      <div class="mt-3 pt-3 border-t border-white/5 flex items-center justify-between">
+        <span class="text-[11px] text-slate-500">📅 ${persianDate(a.createdAt)}</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── Login Page ───
+function renderLogin() {
+  return `<main class="max-w-md mx-auto px-4 py-20">
+    <div class="glass rounded-2xl p-8 fade-up">
+      <div class="text-center mb-8">
+        <div class="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-3xl shadow-xl shadow-blue-500/20 mb-4">🔐</div>
+        <h2 class="text-xl font-bold text-white">ورود به پنل مدیریت</h2>
+        <p class="text-slate-400 text-sm mt-2">برای مدیریت اطلاعیه‌ها وارد شوید</p>
+      </div>
+      ${state.loginError ? `<div class="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm text-center">${state.loginError}</div>` : ''}
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-2">نام کاربری</label>
+          <div class="relative">
+            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">👤</span>
+            <input type="text" id="loginUser" placeholder="نام کاربری را وارد کنید"
+              class="w-full bg-slate-800/50 border border-slate-600/30 rounded-xl pr-10 pl-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20" />
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-2">رمز عبور</label>
+          <div class="relative">
+            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">🔒</span>
+            <input type="${state.showPassword ? 'text' : 'password'}" id="loginPass" placeholder="رمز عبور را وارد کنید"
+              class="w-full bg-slate-800/50 border border-slate-600/30 rounded-xl pr-10 pl-10 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20" />
+            <button data-action="togglePassword" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">${state.showPassword ? '🙈' : '👁️'}</button>
+          </div>
+        </div>
+        <button data-action="doLogin" class="w-full py-3 rounded-xl font-bold text-white bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 transition-all shadow-lg shadow-blue-500/20 ${state.loginLoading ? 'opacity-70 pointer-events-none' : ''}">
+          ${state.loginLoading ? '⏳ در حال ورود...' : '🚀 ورود'}
+        </button>
+      </div>
+      <button data-action="goHome" class="w-full mt-4 py-2 text-sm text-slate-400 hover:text-white transition-all">← بازگشت به صفحه اصلی</button>
+    </div>
+  </main>`;
+}
+
+// ─── Admin Panel ───
+function renderAdminPanel() {
+  const filtered = getFiltered();
+  return `<main class="max-w-6xl mx-auto px-4 py-6 space-y-6">
+    <!-- Form -->
+    <div class="glass rounded-2xl p-6 fade-up">
+      <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">
+        ${state.editingId ? '✏️ ویرایش اطلاعیه' : '➕ اطلاعیه جدید'}
+      </h2>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-1">عنوان</label>
+          <input type="text" id="formTitle" value="${state.formData.title}" placeholder="عنوان اطلاعیه..."
+            class="w-full bg-slate-800/50 border border-slate-600/30 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500/50" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-300 mb-1">متن</label>
+          <textarea id="formContent" rows="4" placeholder="متن اطلاعیه..."
+            class="w-full bg-slate-800/50 border border-slate-600/30 rounded-xl px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-blue-500/50 resize-y">${state.formData.content}</textarea>
+        </div>
+        <div class="flex flex-col sm:flex-row gap-4">
+          <div class="flex-1">
+            <label class="block text-sm font-medium text-slate-300 mb-1">دسته‌بندی</label>
+            <select id="formCategory"
+              class="w-full bg-slate-800/50 border border-slate-600/30 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-500/50">
+              ${Object.entries(CATEGORIES).map(([key, cat]) => `<option value="${key}" ${state.formData.category === key ? 'selected' : ''}>${cat.emoji} ${cat.label}</option>`).join('')}
+            </select>
+          </div>
+          <div class="flex items-end">
+            <label class="flex items-center gap-2 cursor-pointer glass-light rounded-xl px-4 py-3">
+              <input type="checkbox" id="formPinned" ${state.formData.pinned ? 'checked' : ''} class="w-4 h-4 rounded accent-amber-500" />
+              <span class="text-sm text-slate-300">📌 سنجاق کردن</span>
+            </label>
+          </div>
+        </div>
+        <div class="flex gap-3">
+          <button data-action="submitForm" class="flex-1 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 transition-all shadow-lg shadow-blue-500/20">
+            ${state.editingId ? '✅ ذخیره تغییرات' : '📤 انتشار اطلاعیه'}
+          </button>
+          ${state.editingId ? `<button data-action="cancelEdit" class="px-6 py-3 rounded-xl font-medium glass-light text-slate-300 hover:text-white transition-all">❌ انصراف</button>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <!-- List -->
+    <div class="glass rounded-2xl p-6 fade-up">
+      <h2 class="text-lg font-bold text-white mb-4 flex items-center gap-2">📋 اطلاعیه‌های ثبت شده (${state.announcements.length})</h2>
+      <div class="space-y-3">
+        ${state.announcements.length === 0 ? `
+          <div class="text-center py-8">
+            <div class="text-4xl mb-3">📭</div>
+            <p class="text-slate-400">هنوز اطلاعیه‌ای ثبت نشده</p>
+          </div>
+        ` : state.announcements.map(a => {
+          const cat = CATEGORIES[a.category] || CATEGORIES.news;
+          const c = COLORS[cat.color];
+          return `
+          <div class="glass-light rounded-xl p-4 transition-all" style="border-right:3px solid ${c.border}">
+            <div class="flex items-start justify-between">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1 flex-wrap">
+                  <span class="px-2 py-0.5 rounded text-[11px] border ${COLORS[cat.color].badge}">${cat.emoji} ${cat.label}</span>
+                  ${a.pinned ? '<span class="text-amber-400 text-xs">📌</span>' : ''}
+                  <span class="text-[11px] text-slate-500">${timeAgo(a.createdAt)}</span>
+                </div>
+                <h4 class="font-bold text-white text-sm truncate">${a.title}</h4>
+                <p class="text-xs text-slate-400 mt-1 line-clamp-1">${a.content}</p>
+              </div>
+              <div class="flex items-center gap-1 mr-3 shrink-0">
+                <button data-action="togglePin" data-id="${a.id}" data-pinned="${a.pinned}" title="${a.pinned ? 'رفع سنجاق' : 'سنجاق'}"
+                  class="w-8 h-8 rounded-lg flex items-center justify-center text-sm transition-all ${a.pinned ? 'bg-amber-500/20 text-amber-400' : 'hover:bg-slate-600/50 text-slate-400'}">📌</button>
+                <button data-action="editItem" data-id="${a.id}" title="ویرایش"
+                  class="w-8 h-8 rounded-lg flex items-center justify-center text-sm hover:bg-blue-500/20 text-slate-400 hover:text-blue-400 transition-all">✏️</button>
+                ${state.deleteConfirm === a.id ? `
+                  <button data-action="confirmDelete" data-id="${a.id}" title="تأیید حذف"
+                    class="w-8 h-8 rounded-lg flex items-center justify-center text-sm bg-red-500/30 text-red-400 animate-pulse">✓</button>
+                  <button data-action="cancelDelete" title="انصراف"
+                    class="w-8 h-8 rounded-lg flex items-center justify-center text-sm hover:bg-slate-600/50 text-slate-400">✗</button>
+                ` : `
+                  <button data-action="deleteItem" data-id="${a.id}" title="حذف"
+                    class="w-8 h-8 rounded-lg flex items-center justify-center text-sm hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-all">🗑️</button>
+                `}
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  </main>`;
+}
+
+// ─── Event Handling ───
+function attachEvents() {
+  // Action buttons
+  document.querySelectorAll('[data-action]').forEach(el => {
+    el.addEventListener('click', handleAction);
+  });
+
+  // Filter buttons
+  document.querySelectorAll('[data-filter]').forEach(el => {
+    el.addEventListener('click', () => {
+      state.filter = el.dataset.filter;
+      render();
+    });
+  });
+
+  // Expand buttons
+  document.querySelectorAll('[data-expand]').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = el.dataset.expand;
+      if (state.expandedCards.has(id)) state.expandedCards.delete(id);
+      else state.expandedCards.add(id);
+      render();
+    });
+  });
+
+  // Search input
+  const searchInput = document.getElementById('searchInput');
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      state.search = e.target.value;
+      render();
+      // Restore cursor position
+      const newInput = document.getElementById('searchInput');
+      if (newInput) { newInput.focus(); newInput.setSelectionRange(e.target.selectionStart, e.target.selectionEnd); }
+    });
+  }
+}
+
+async function handleAction(e) {
+  const btn = e.currentTarget;
+  const action = btn.dataset.action;
+
+  switch (action) {
+    case 'goHome':
+      state.page = 'home';
+      render();
+      break;
+
+    case 'goLogin':
+      state.page = 'login';
+      state.loginError = '';
+      render();
+      break;
+
+    case 'goAdmin':
+      state.page = 'admin';
+      render();
+      break;
+
+    case 'logout':
+      state.isAdmin = false;
+      state.page = 'home';
+      showToast('با موفقیت خارج شدید', 'info');
+      break;
+
+    case 'togglePassword':
+      state.showPassword = !state.showPassword;
+      render();
+      break;
+
+    case 'doLogin': {
+      const user = document.getElementById('loginUser')?.value?.trim();
+      const pass = document.getElementById('loginPass')?.value;
+      if (!user || !pass) {
+        state.loginError = 'لطفاً نام کاربری و رمز عبور را وارد کنید';
+        render();
+        return;
+      }
+      state.loginLoading = true;
+      state.loginError = '';
+      render();
+      setTimeout(() => {
+        if (user === ADMIN_USER && pass === ADMIN_PASS) {
+          state.isAdmin = true;
+          state.page = 'admin';
+          state.loginLoading = false;
+          showToast('خوش آمدید، ادمین! 👋');
+        } else {
+          state.loginError = 'نام کاربری یا رمز عبور اشتباه است';
+          state.loginLoading = false;
+          render();
+        }
+      }, 800);
+      break;
+    }
+
+    case 'submitForm': {
+      const title = document.getElementById('formTitle')?.value?.trim();
+      const content = document.getElementById('formContent')?.value?.trim();
+      const category = document.getElementById('formCategory')?.value;
+      const pinned = document.getElementById('formPinned')?.checked || false;
+
+      if (!title || !content) {
+        showToast('لطفاً عنوان و متن را پر کنید', 'error');
+        return;
+      }
+
+      try {
+        if (state.editingId) {
+          await updateAnnouncement(state.editingId, { title, content, category, pinned });
+          state.editingId = null;
+          showToast('اطلاعیه با موفقیت ویرایش شد ✏️');
+        } else {
+          await addAnnouncement({ title, content, category, pinned });
+          showToast('اطلاعیه با موفقیت منتشر شد 🎉');
+        }
+        state.formData = { title: '', content: '', category: 'news', pinned: false };
+      } catch (err) {
+        console.error(err);
+        showToast('خطا در ذخیره اطلاعیه', 'error');
+      }
+      render();
+      break;
+    }
+
+    case 'cancelEdit':
+      state.editingId = null;
+      state.formData = { title: '', content: '', category: 'news', pinned: false };
+      render();
+      break;
+
+    case 'editItem': {
+      const id = btn.dataset.id;
+      const a = state.announcements.find(x => x.id === id);
+      if (a) {
+        state.editingId = id;
+        state.formData = { title: a.title, content: a.content, category: a.category, pinned: a.pinned || false };
+        render();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+      break;
+    }
+
+    case 'deleteItem':
+      state.deleteConfirm = btn.dataset.id;
+      render();
+      break;
+
+    case 'cancelDelete':
+      state.deleteConfirm = null;
+      render();
+      break;
+
+    case 'confirmDelete': {
+      const id = btn.dataset.id;
+      try {
+        await deleteAnnouncement(id);
+        state.deleteConfirm = null;
+        showToast('اطلاعیه حذف شد 🗑️');
+      } catch (err) {
+        console.error(err);
+        showToast('خطا در حذف اطلاعیه', 'error');
+      }
+      break;
+    }
+
+    case 'togglePin': {
+      const id = btn.dataset.id;
+      const pinned = btn.dataset.pinned === 'true';
+      try {
+        await updateAnnouncement(id, { pinned: !pinned });
+        showToast(pinned ? 'سنجاق برداشته شد' : 'سنجاق شد 📌');
+      } catch (err) {
+        showToast('خطا', 'error');
+      }
+      break;
+    }
+  }
+}
+
+// ─── Initial Render ───
+render();
+</script>
+</body>
+</html>
